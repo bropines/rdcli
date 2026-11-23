@@ -607,6 +607,28 @@ func (c *Client) Home(ctx context.Context) (string, error) {
 	return fd.GetPath(), nil
 }
 
+// Probe checks that the device's file service answers, by listing the home
+// folder within d. On Windows, file operations go to the RustDesk
+// connection manager process, which quits shortly after the last session
+// ends: a session opened in that moment gets no answers at all (ErrTimeout),
+// and a new connection, a few seconds later, works.
+func (c *Client) Probe(ctx context.Context, d time.Duration) error {
+	c.mu.Lock()
+	known := c.home != ""
+	c.mu.Unlock()
+	if known {
+		return nil
+	}
+	fd, err := c.readDirWithin(ctx, "", false, d/2, d/2)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.home = fd.GetPath()
+	c.mu.Unlock()
+	return nil
+}
+
 // List lists a remote folder. "" and "~" list the remote user's home, and
 // on Windows peers "/" lists the drives.
 func (c *Client) List(ctx context.Context, remoteDir string, showHidden bool) ([]Entry, error) {
@@ -644,6 +666,10 @@ func toEntry(e *pb.FileEntry) Entry {
 // readDir sends one ReadDir and waits for its answer. Listings have no id
 // on the wire, so they are serialized.
 func (c *Client) readDir(ctx context.Context, path string, showHidden bool) (*pb.FileDirectory, error) {
+	return c.readDirWithin(ctx, path, showHidden, c.initialWait, c.timeout)
+}
+
+func (c *Client) readDirWithin(ctx context.Context, path string, showHidden bool, initialWait, timeout time.Duration) (*pb.FileDirectory, error) {
 	if err := c.check(); err != nil {
 		return nil, err
 	}
@@ -651,7 +677,7 @@ func (c *Client) readDir(ctx context.Context, path string, showHidden bool) (*pb
 		return nil, err
 	}
 	defer func() { <-c.listSem }()
-	if err := c.waitInitial(ctx); err != nil {
+	if err := c.waitInitial(ctx, initialWait); err != nil {
 		return nil, err
 	}
 	r := &listRequest{path: path, ch: make(chan listResult, 1)}
@@ -674,7 +700,7 @@ func (c *Client) readDir(ctx context.Context, path string, showHidden bool) (*pb
 		giveUp()
 		return nil, err
 	}
-	t := time.NewTimer(c.timeout)
+	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case res := <-r.ch:
@@ -692,8 +718,8 @@ func (c *Client) readDir(ctx context.Context, path string, showHidden bool) (*pb
 
 // waitInitial lets the listing the peer sends after login pass, so that it
 // is not taken for an answer.
-func (c *Client) waitInitial(ctx context.Context) error {
-	t := time.NewTimer(c.initialWait)
+func (c *Client) waitInitial(ctx context.Context, wait time.Duration) error {
+	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case <-c.initial:
@@ -704,7 +730,7 @@ func (c *Client) waitInitial(ctx context.Context) error {
 			close(c.initial)
 			c.stale++ // it may still come
 			if c.debugf != nil {
-				c.debugf("files: no listing after login within %v", c.initialWait)
+				c.debugf("files: no listing after login within %v", wait)
 			}
 		}
 		c.mu.Unlock()

@@ -117,6 +117,30 @@ func TestListWithoutInitialListing(t *testing.T) {
 	}
 }
 
+// A peer whose file service is gone (Windows, the connection manager
+// quitting) fails the probe quickly; a working one passes and gives home.
+func TestProbe(t *testing.T) {
+	p := newFakePeer(t, false, "/home/u")
+	p.script = func(m *pb.Message) bool { return m.GetFileAction().GetReadDir() != nil }
+	c := p.start(false)
+	start := time.Now()
+	if err := c.Probe(testCtx(t), 200*time.Millisecond); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("want a timeout, got %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("probe took %v", d)
+	}
+
+	p = newFakePeer(t, false, "/home/u")
+	c = p.start(true)
+	if err := c.Probe(testCtx(t), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := c.Home(testCtx(t)); h != "/home/u" {
+		t.Fatalf("home %q", h)
+	}
+}
+
 func TestListTimeoutThenLateAnswer(t *testing.T) {
 	p := newFakePeer(t, false, "/home/u")
 	p.put("/home/u/a/1", nil, 0)

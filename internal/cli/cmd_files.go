@@ -21,19 +21,38 @@ func init() {
 }
 
 // openFiles logs in for a file-transfer session.
+// A session that gets no answer to its first listing (see files.Probe) is
+// dropped for a new one.
 func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, func(), error) {
-	s, err := t.connect(ctx, pb.ConnType_FILE_TRANSFER, files.LoginFields("", showHidden), files.LoginErrorCode)
-	if err != nil {
-		return nil, nil, err
+	const attempts = 3
+	for i := 1; ; i++ {
+		s, err := t.connect(ctx, pb.ConnType_FILE_TRANSFER, files.LoginFields("", showHidden), files.LoginErrorCode)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pi := s.PeerInfo; pi != nil && pi.GetUsername() == "" && len(pi.GetWindowsSessions().GetSessions()) == 0 {
+			s.Close("")
+			return nil, nil, errors.New("no user is logged on at the remote device; log on there first")
+		}
+		kctx, cancel := context.WithCancel(ctx)
+		go s.KeepAlive(kctx, 20*time.Second)
+		c := files.New(s, t.flags.debugf)
+		err = c.Probe(ctx, 10*time.Second)
+		if err == nil {
+			return c, func() { cancel(); c.Close() }, nil
+		}
+		cancel()
+		c.Close()
+		if !errors.Is(err, files.ErrTimeout) || i == attempts {
+			return nil, nil, err
+		}
+		t.flags.logf("the device's file service did not answer; reconnecting")
+		select {
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
 	}
-	if pi := s.PeerInfo; pi != nil && pi.GetUsername() == "" && len(pi.GetWindowsSessions().GetSessions()) == 0 {
-		s.Close("")
-		return nil, nil, errors.New("no user is logged on at the remote device; log on there first")
-	}
-	kctx, cancel := context.WithCancel(ctx)
-	go s.KeepAlive(kctx, 20*time.Second)
-	c := files.New(s, t.flags.debugf)
-	return c, func() { cancel(); c.Close() }, nil
 }
 
 func runLs(ctx context.Context, args []string) error {

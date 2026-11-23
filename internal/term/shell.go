@@ -92,6 +92,7 @@ func RunShell(ctx context.Context, s *peer.Session, o ShellOptions) (Result, err
 	stdinTTY := IsTerminal(os.Stdin)
 	stdoutTTY := IsTerminal(os.Stdout)
 	cols, rows := 80, 24
+	var sizeMu sync.Mutex // cols, rows: the resize watcher runs apart
 	if stdoutTTY {
 		if w, h, err := xterm.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && h > 0 {
 			cols, rows = w, h
@@ -162,6 +163,8 @@ wait:
 		}
 		stop := watchResize(func() {
 			w, h, err := xterm.GetSize(int(os.Stdout.Fd()))
+			sizeMu.Lock()
+			defer sizeMu.Unlock()
 			if err != nil || w <= 0 || h <= 0 || (w == cols && h == rows) {
 				return
 			}
@@ -171,6 +174,16 @@ wait:
 			}}})
 		})
 		defer stop()
+	}
+	// RustDesk on Windows runs the shell under a helper whose input thread
+	// stays blocked on its pipe after the shell exits (1.5.3), so the device
+	// reports the end only once more input arrives. A resize to the same
+	// size is that input and harmless to a live shell.
+	var nudge <-chan time.Time
+	if isWindowsPeer(s) {
+		tk := time.NewTicker(2 * time.Second)
+		defer tk.Stop()
+		nudge = tk.C
 	}
 	var filter *cmdFilter
 	if o.Command != "" && !o.RawCommand && !isWindowsPeer(s) {
@@ -260,6 +273,13 @@ wait:
 				}
 				return Result{ExitCode: *ev.exit}, nil
 			}
+		case <-nudge:
+			sizeMu.Lock()
+			w, h := cols, rows
+			sizeMu.Unlock()
+			send(&pb.TerminalAction{Union: &pb.TerminalAction_Resize{Resize: &pb.ResizeTerminal{
+				TerminalId: firstTerminal, Rows: uint32(h), Cols: uint32(w),
+			}}})
 		case b := <-input:
 			if !stdinTTY && winPeer {
 				b = lf.toCR(b)
