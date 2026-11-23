@@ -1,0 +1,10 @@
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go"]
+    out: internal/pb
+    opt:
+      - paths=source_relative
+      - Msession.proto=github.com/bropines/rdcli/internal/pb
+      - Mrendezvous.proto=github.com/bropines/rdcli/internal/pb

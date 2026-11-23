@@ -1,0 +1,16 @@
+rdcli
+Copyright (c) 2026 bropines and contributors
+Licensed under the MIT License (see LICENSE).
+
+RustDesk is a trademark of its respective owners (Purslane Ltd.). rdcli is an
+independent command-line client that speaks the RustDesk network protocol so
+it can connect to RustDesk peers through RustDesk-compatible servers; it is not
+affiliated with or endorsed by RustDesk / Purslane Ltd.
+
+proto/*.proto are written for the rdweb and rdcli projects (MIT, same
+authors). They declare only the messages these clients use, with field numbers
+and types matching the protocol for interoperability. No RustDesk source code
+is included.
+
+Third-party Go modules are distributed under their own licenses; see go.mod
+and their LICENSE files.
