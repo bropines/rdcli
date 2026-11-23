@@ -37,7 +37,8 @@ func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, 
 		kctx, cancel := context.WithCancel(ctx)
 		go s.KeepAlive(kctx, 20*time.Second)
 		c := files.New(s, t.flags.debugf)
-		err = c.Probe(ctx, 10*time.Second)
+		// A healthy session lists within about a second; a doomed one never.
+		err = c.Probe(ctx, 6*time.Second)
 		if err == nil {
 			return c, func() { cancel(); c.Close() }, nil
 		}
@@ -48,7 +49,7 @@ func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, 
 		}
 		t.flags.logf("the device's file service did not answer; reconnecting")
 		select {
-		case <-time.After(3 * time.Second):
+		case <-time.After(time.Second):
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		}

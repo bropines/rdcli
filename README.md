@@ -97,7 +97,9 @@ echo 'df -h; exit' | rdcli shell 123456789 # non-interactive
   `rdcli shell <id> --service <id printed on exit>`.
 - `--os-user Administrator` (Windows devices): run the shell under the
   device's own account by proving an administrator account of that device.
-- The exit code of the remote shell is rdcli's exit code.
+- The exit code of the remote shell is rdcli's exit code. Windows devices
+  report 0 whatever the shell exited with: RustDesk runs the shell under a
+  helper process and reports the helper's code.
 
 The device needs the terminal permission (RustDesk: Settings > Security >
 Permissions > "Enable terminal").
