@@ -210,7 +210,9 @@ wait:
 	} else if o.Command != "" {
 		eol := "\n"
 		if isWindowsPeer(s) {
-			eol = "\r\n"
+			// Enter is CR; PSReadLine takes LF (Ctrl+J) for "add a line",
+			// which leaves the exit stuck at a continuation prompt.
+			eol = "\r"
 		}
 		writeData([]byte(o.Command + eol + "exit" + eol))
 	}
@@ -220,6 +222,8 @@ wait:
 	if o.Command == "" {
 		go readInput(os.Stdin, input, inputErr)
 	}
+	winPeer := isWindowsPeer(s)
+	var lf lineEnds
 	esc := &escaper{char: o.Escape, lineStart: true, enabled: stdinTTY && o.Escape > 0}
 
 	detach := func() (Result, error) {
@@ -257,6 +261,9 @@ wait:
 				return Result{ExitCode: *ev.exit}, nil
 			}
 		case b := <-input:
+			if !stdinTTY && winPeer {
+				b = lf.toCR(b)
+			}
 			out, action := esc.feed(b)
 			if len(out) > 0 {
 				if err := writeData(out); err != nil {
@@ -274,12 +281,31 @@ wait:
 			input = nil
 			inputErr = nil
 			if err == io.EOF && !stdinTTY && isWindowsPeer(s) {
-				writeData([]byte("\r\nexit\r\n")) // cmd/PowerShell have no ^D
+				writeData([]byte("\rexit\r")) // cmd/PowerShell have no ^D; Enter is CR
 			} else if err == io.EOF && !stdinTTY {
 				writeData([]byte{4}) // ^D: end of input for the remote shell
 			}
 		}
 	}
+}
+
+// lineEnds turns piped line ends into the Enter (CR) a Windows console
+// expects: LF and CRLF become CR, also across reads.
+type lineEnds struct{ lastCR bool }
+
+func (l *lineEnds) toCR(in []byte) []byte {
+	out := make([]byte, 0, len(in))
+	for _, c := range in {
+		switch {
+		case c == '\n' && l.lastCR:
+		case c == '\n':
+			out = append(out, '\r')
+		default:
+			out = append(out, c)
+		}
+		l.lastCR = c == '\r'
+	}
+	return out
 }
 
 func isWindowsPeer(s *peer.Session) bool {

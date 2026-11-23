@@ -32,7 +32,7 @@ func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, 
 	}
 	kctx, cancel := context.WithCancel(ctx)
 	go s.KeepAlive(kctx, 20*time.Second)
-	c := files.New(s)
+	c := files.New(s, t.flags.debugf)
 	return c, func() { cancel(); c.Close() }, nil
 }
 

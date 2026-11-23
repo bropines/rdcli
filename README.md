@@ -126,6 +126,12 @@ Host office
     ProxyCommand rdcli pipe 123456789 %h:%p
 ```
 
+RustDesk's protocol has no half-close: when stdin ends, the target is not
+told. `rdcli pipe` keeps printing what comes back until the target closes the
+connection (`printf 'GET / HTTP/1.0\r\n\r\n' | rdcli pipe ...` works), so a
+target that waits for end of input keeps it running until Ctrl+C. Forwarded
+sockets give up after 10 seconds of silence instead.
+
 Two modes, picked automatically:
 
 - **Multiplexed** (RustDesk 1.5+ devices): one login, one encrypted link; every

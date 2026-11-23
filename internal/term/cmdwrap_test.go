@@ -33,6 +33,14 @@ func TestCmdFilterSplits(t *testing.T) {
 	}
 }
 
+func TestLineEndsToCR(t *testing.T) {
+	var l lineEnds
+	got := string(l.toCR([]byte("a\nb\r"))) + string(l.toCR([]byte("\nc\r\nd")))
+	if got != "a\rb\rc\rd" {
+		t.Fatalf("%q", got)
+	}
+}
+
 // The typed line in a real POSIX shell: decoded, run, status reported.
 func TestWrapCommandInShell(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -55,5 +63,22 @@ func TestWrapCommandInShell(t *testing.T) {
 	got, done, code := f.feed(out)
 	if !done || code != 1 || string(got) != "a; b https://x.example/?q=1\nno newline" {
 		t.Fatalf("done=%v code=%d %q (raw %q)", done, code, got, out)
+	}
+	// a syntax error still ends with the marker; quotes and exit pass through
+	for c, want := range map[string]int{`echo 'it''s' "x"; exit 3`: 3, `if then fi (`: 2} {
+		out, _ := exec.Command("sh", "-c", WrapCommand(c)).CombinedOutput()
+		f := &cmdFilter{}
+		_, done, code := f.feed(out)
+		if !done || code == 0 || (want == 3 && code != 3) {
+			t.Fatalf("%q: done=%v code=%d (raw %q)", c, done, code, out)
+		}
+	}
+	if sh, err := exec.LookPath("zsh"); err == nil {
+		out, _ := exec.Command(sh, "-c", WrapCommand(`echo a https://x.y/?q=1; exit 3`)).CombinedOutput()
+		f := &cmdFilter{}
+		_, done, code := f.feed(out)
+		if !done || code == 0 {
+			t.Fatalf("zsh nomatch: done=%v code=%d (raw %q)", done, code, out)
+		}
 	}
 }

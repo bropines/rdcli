@@ -28,7 +28,10 @@ const wrapChunk = 600
 // a variable in short lines, then eval. The leading spaces keep them out of
 // the history where the shell ignores such lines.
 func WrapCommand(cmd string) string {
-	script := "unset __rdcli_b\nprintf '\\036RDCLI:B\\036\\n'\n" + cmd + "\n" +
+	// The command runs in a subshell of its own eval: a syntax error or a
+	// zsh "no matches found" aborts only that, not the end marker and exit.
+	quoted := "'" + strings.ReplaceAll(cmd, "'", `'\''`) + "'"
+	script := "unset __rdcli_b\nprintf '\\036RDCLI:B\\036\\n'\n(eval " + quoted + ")\n" +
 		"__rdcli_rc=$?\nprintf '\\036RDCLI:E%d\\036\\n' \"$__rdcli_rc\"\nexit \"$__rdcli_rc\"\n"
 	b := base64.StdEncoding.EncodeToString([]byte(script))
 	var sb strings.Builder

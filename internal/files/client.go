@@ -156,6 +156,7 @@ type Client struct {
 	initialWait time.Duration
 	emptyWait   time.Duration
 	goos        string
+	debugf      func(string, ...any)
 
 	enc *zstd.Encoder
 	dec *zstd.Decoder
@@ -197,9 +198,14 @@ func LoginErrorCode(e string) peer.Code {
 
 // New starts the client on a session logged in with ConnType FILE_TRANSFER
 // and LoginFields. It owns s.Recv from here on.
-func New(s *peer.Session) *Client { return newClient(s, s.PeerInfo) }
+// debugf, if not nil, traces listings (rdcli -v).
+func New(s *peer.Session, debugf func(string, ...any)) *Client {
+	return newClientDebug(s, s.PeerInfo, debugf)
+}
 
-func newClient(l link, pi *pb.PeerInfo) *Client {
+func newClient(l link, pi *pb.PeerInfo) *Client { return newClientDebug(l, pi, nil) }
+
+func newClientDebug(l link, pi *pb.PeerInfo, debugf func(string, ...any)) *Client {
 	enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
 	dec, _ := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxBlockSize))
 	c := &Client{
@@ -211,6 +217,7 @@ func newClient(l link, pi *pb.PeerInfo) *Client {
 		initialWait: initialListingWait,
 		emptyWait:   emptyDirsWait,
 		goos:        localOS,
+		debugf:      debugf,
 		enc:         enc,
 		dec:         dec,
 		transferSem: make(chan struct{}, 1),
@@ -259,6 +266,13 @@ func (c *Client) readLoop() {
 		if err != nil {
 			c.fail(err)
 			return
+		}
+		if c.debugf != nil {
+			if fr, ok := m.Union.(*pb.Message_FileResponse); !ok {
+				c.debugf("files: received %T", m.Union)
+			} else if _, block := fr.FileResponse.Union.(*pb.FileResponse_Block); !block {
+				c.debugf("files: received %T", fr.FileResponse.Union)
+			}
 		}
 		switch u := m.Union.(type) {
 		case *pb.Message_FileResponse:
@@ -333,6 +347,13 @@ func (c *Client) deliver(id int32, m any) {
 func (c *Client) onListing(fd *pb.FileDirectory, e *pb.FileTransferError) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.debugf != nil {
+		if fd != nil {
+			c.debugf("files: listing of %q (%d entries); initial seen %v, pending %v, stale %d", fd.GetPath(), len(fd.GetEntries()), c.initialSeen, c.listing != nil, c.stale)
+		} else {
+			c.debugf("files: listing error %q; initial seen %v, pending %v, stale %d", e.GetError(), c.initialSeen, c.listing != nil, c.stale)
+		}
+	}
 	if !c.initialSeen {
 		c.initialSeen = true
 		close(c.initial)
@@ -645,6 +666,9 @@ func (c *Client) readDir(ctx context.Context, path string, showHidden bool) (*pb
 		}
 		c.mu.Unlock()
 	}
+	if c.debugf != nil {
+		c.debugf("files: list %q", path)
+	}
 	err := c.action(&pb.FileAction{Union: &pb.FileAction_ReadDir{ReadDir: &pb.ReadDir{Path: path, IncludeHidden: showHidden}}})
 	if err != nil {
 		giveUp()
@@ -679,6 +703,9 @@ func (c *Client) waitInitial(ctx context.Context) error {
 			c.initialSeen = true
 			close(c.initial)
 			c.stale++ // it may still come
+			if c.debugf != nil {
+				c.debugf("files: no listing after login within %v", c.initialWait)
+			}
 		}
 		c.mu.Unlock()
 	case <-ctx.Done():

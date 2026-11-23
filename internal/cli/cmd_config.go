@@ -130,7 +130,7 @@ func runServer(ctx context.Context, args []string) error {
 		}
 		return saved(cfg, "imported %s (relay %s, API %s) as %q", s.IDServer, dash(s.Relay), dash(s.API), name)
 	case "default":
-		if len(args) != 1 {
+		if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 			return usagef("server default <name>")
 		}
 		if cfg.Servers[args[0]] == nil {
@@ -139,7 +139,7 @@ func runServer(ctx context.Context, args []string) error {
 		cfg.DefaultServer = args[0]
 		return saved(cfg, "default server profile: %s", args[0])
 	case "remove", "rm":
-		if len(args) != 1 {
+		if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 			return usagef("server remove <name>")
 		}
 		if cfg.Servers[args[0]] == nil {
@@ -321,14 +321,20 @@ func runPeers(ctx context.Context, args []string) error {
 }
 
 func runForget(ctx context.Context, args []string) error {
-	if len(args) != 1 {
-		return usagef("forget <device>")
+	fs := newFlagSet("forget", "<device>")
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		fs.Usage()
+		return usagef("forget takes one device")
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	id, _ := cfg.ResolvePeer(args[0])
+	id, _ := cfg.ResolvePeer(pos[0])
 	if !cfg.Forget(id) {
 		fmt.Printf("no remembered password for %s\n", id)
 		return nil
