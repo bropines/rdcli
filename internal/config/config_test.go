@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestParseConfigString(t *testing.T) {
+	s, err := ParseConfigString(" 0nI9cnQtF3VzNUUyF3RKRDNudHc3lUMDB3MZBjbOBVQrAHWphEbuVzaLVnVl9kI6ISeltmIsISbvNmLlxGctFGel5Cbl5WYw9yL6MHc0RHaiojIpBXYiwiI3ETMxIjOt92YuUGbw1WY4VmLkJnI6ISehxWZyJCLi02bj5SZsBXbhhXZuQmciojI0N3boJye\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Server{IDServer: "rd.example.com", Relay: "rd.example.com:21117", API: "https://panel.example.com", Key: "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="}
+	if *s != want {
+		t.Fatalf("%+v", *s)
+	}
+	if _, err := ParseConfigString("hello"); err == nil {
+		t.Fatal("garbage accepted")
+	}
+}
+
 func TestSaveLoadAndPeers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("RDCLI_CONFIG", filepath.Join(dir, "sub", "config.json"))

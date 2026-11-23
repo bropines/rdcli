@@ -457,6 +457,32 @@ func TestForwardCancelWithBlockedStdin(t *testing.T) {
 	}
 }
 
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// printf 'request\n' | rdcli pipe: stdin ends at once, the answer must
+// still arrive, in both modes. A plain socket gives up after DefaultLinger
+// of silence.
+func TestPipeAnswerAfterStdinEOF(t *testing.T) {
+	forward.DefaultLinger = 100 * time.Millisecond
+	defer func() { forward.DefaultLinger = 10 * time.Second }()
+	for _, mux := range []bool{true, false} {
+		srv := testpeer.Start(t, testpeer.Options{Password: "pw", Mux: mux})
+		target := testpeer.ReplyServer(t, "the answer", 600*time.Millisecond)
+		host, port, _ := net.SplitHostPort(target)
+		var p int32
+		fmt.Sscan(port, &p)
+		m := &forward.Mapping{Target: forward.Target{Host: host, Port: p}, Dial: dialer(srv)}
+		var out bytes.Buffer
+		err := m.Serve(ctx(t), forward.Stdio{In: io.NopCloser(strings.NewReader("request\n")), Out: nopWriteCloser{&out}})
+		if err != nil || out.String() != "the answer" {
+			t.Fatalf("mux=%v: %v, got %q", mux, err, out.String())
+		}
+		m.Close()
+	}
+}
+
 func TestStaleRememberedHashFallsBackToPassword(t *testing.T) {
 	srv := testpeer.Start(t, testpeer.Options{Password: "pw"})
 	o := opts(srv, pb.ConnType_TERMINAL, termLogin)

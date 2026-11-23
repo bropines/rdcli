@@ -24,7 +24,8 @@ func runShell(ctx context.Context, args []string) error {
 	cf.register(fs, false)
 	persistent := fs.Bool("persistent", false, "keep the shell running on the device after disconnecting (reattach with --service)")
 	service := fs.String("service", "", "reattach to a persistent shell by its service id")
-	command := fs.String("c", "", "type this command into the shell, then exit (output includes the shell's echo)")
+	command := fs.String("c", "", "run this command in the shell, print its output and exit with its status")
+	raw := fs.Bool("raw", false, "with -c: type the command as is (output includes prompts and echo; for non-POSIX shells)")
 	osUser := fs.String("os-user", "", "Windows: run the shell as this administrator account of the device (asks for its password)")
 	escape := fs.String("e", "~", `escape character at the start of a line ("none" disables)`)
 	pos, err := parseFlags(fs, args)
@@ -42,7 +43,7 @@ func runShell(ctx context.Context, args []string) error {
 	if err := t.secrets(ctx); err != nil {
 		return err
 	}
-	opts := term.ShellOptions{Persistent: *persistent, ServiceID: *service, Command: *command}
+	opts := term.ShellOptions{Persistent: *persistent, ServiceID: *service, Command: *command, RawCommand: *raw}
 	switch {
 	case *escape == "none":
 		opts.Escape = -1

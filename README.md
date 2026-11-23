@@ -19,7 +19,9 @@ desktop client.
 
 ## Install
 
-Download a binary from the releases, or build it (Go 1.27+):
+Download a binary from the [releases](https://github.com/bropines/rdcli/releases)
+(the `nightly` pre-release is the latest build of `main`; every CI run also
+keeps its archives as an artifact), or build it (Go 1.27+):
 
 ```sh
 go install github.com/bropines/rdcli/cmd/rdcli@latest
@@ -32,6 +34,13 @@ take its settings:
 
 ```sh
 rdcli server import            # reads RustDesk2.toml: ID server, relay, key, API server
+```
+
+Or from the config string RustDesk exports (Settings > Network > ID/Relay
+server, the copy button):
+
+```sh
+rdcli server import home --config '0nI9cnQtF3Vz...'
 ```
 
 Otherwise:
@@ -71,9 +80,14 @@ rdcli logout
 ```sh
 rdcli shell 123456789
 rdcli shell office-pc          # an alias from the config
-rdcli shell 123456789 -c 'uptime'          # type a command, then exit
+rdcli shell 123456789 -c 'uptime'          # run one command, then exit
 echo 'df -h; exit' | rdcli shell 123456789 # non-interactive
 ```
+
+- `-c` prints only the command's output and exits with its status (macOS,
+  Linux and other POSIX shells: the command travels base64-encoded, so plugins
+  of the remote line editor cannot rewrite it). On Windows devices, or with
+  `--raw`, the command is typed as is and the output includes prompts and echo.
 
 - The device runs the user's shell (PowerShell/cmd on Windows). The terminal
   size follows yours; Ctrl+C and full-screen programs work.

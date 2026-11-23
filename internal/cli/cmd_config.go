@@ -84,8 +84,9 @@ func runServer(ctx context.Context, args []string) error {
 		}
 		return saved(cfg, "server profile %q saved", pos[0])
 	case "import":
-		fs := newFlagSet("server import", "[name] [--from RustDesk2.toml]")
+		fs := newFlagSet("server import", "[name] [--from RustDesk2.toml | --config STRING]")
 		from := fs.String("from", "", "path of RustDesk2.toml (default: the installed client's)")
+		cfgString := fs.String("config", "", `a RustDesk config string (Settings > Network > ID/Relay server > export; "-" reads it from stdin)`)
 		pos, err := parseFlags(fs, args)
 		if err != nil {
 			return err
@@ -94,18 +95,31 @@ func runServer(ctx context.Context, args []string) error {
 		if len(pos) > 0 {
 			name = pos[0]
 		}
-		opts, err := config.RustDeskOptions(*from)
-		if err != nil {
-			return fmt.Errorf("cannot read the RustDesk client's settings: %w", err)
-		}
-		s := &config.Server{
-			IDServer: opts["custom-rendezvous-server"],
-			Relay:    opts["relay-server"],
-			Key:      opts["key"],
-			API:      opts["api-server"],
-		}
-		if s.IDServer == "" || s.Key == "" {
-			return errors.New("the RustDesk client has no custom ID server and key configured")
+		var s *config.Server
+		if *cfgString != "" {
+			str := *cfgString
+			if str == "-" {
+				if str, err = term.ReadPasswordStdin(); err != nil {
+					return err
+				}
+			}
+			if s, err = config.ParseConfigString(str); err != nil {
+				return usagef("%v", err)
+			}
+		} else {
+			opts, err := config.RustDeskOptions(*from)
+			if err != nil {
+				return fmt.Errorf("cannot read the RustDesk client's settings: %w", err)
+			}
+			s = &config.Server{
+				IDServer: opts["custom-rendezvous-server"],
+				Relay:    opts["relay-server"],
+				Key:      opts["key"],
+				API:      opts["api-server"],
+			}
+			if s.IDServer == "" || s.Key == "" {
+				return errors.New("the RustDesk client has no custom ID server and key configured")
+			}
 		}
 		if old := cfg.Servers[name]; old != nil {
 			s.Token, s.User, s.MyID, s.UUID = old.Token, old.User, old.MyID, old.UUID

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,8 +25,64 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      - name: build for every release target
+
+  # Every push and PR builds all release targets; the archives are kept as
+  # the run's artifact for 30 days.
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - id: version
         run: |
-          for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
-            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/rdcli
-          done
+          base=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo v0.0.0)
+          echo "version=${base#v}-dev.$(git rev-list --count HEAD).$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - run: bash scripts/build.sh "${{ steps.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rdcli-${{ steps.version.outputs.version }}
+          path: dist/
+          retention-days: 30
+
+  # main also refreshes the "nightly" pre-release: stable download links to
+  # the latest build. Tagged releases come from release.yml.
+  nightly:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: nightly
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rdcli-${{ needs.build.outputs.version }}
+          path: dist
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          git tag -f nightly
+          git push -f origin refs/tags/nightly
+          notes="Latest build of main: ${VERSION} (${GITHUB_SHA::7}). Not a release; for those see the vX.Y.Z tags."
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "rdcli nightly" --notes "$notes"
+            # drop the previous build's archives (their names carry the version)
+            gh release view nightly --json assets -q '.assets[].name' | while read -r a; do
+              gh release delete-asset nightly "$a" -y
+            done
+          else
+            gh release create nightly --prerelease --title "rdcli nightly" --notes "$notes"
+          fi
+          gh release upload nightly dist/* --clobber

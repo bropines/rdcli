@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/bropines/rdcli/internal/pb"
 	"github.com/bropines/rdcli/internal/peer"
@@ -152,21 +154,27 @@ func (m *Mapping) channel(ctx context.Context) (*Tunnel, *peer.Session, error) {
 // multiplexing: framing and encryption end with the login.
 func (m *Mapping) runLegacy(ctx context.Context, s *peer.Session, local io.ReadWriteCloser) error {
 	s.SetRaw()
-	done := make(chan error, 2)
+	type half struct {
+		err    error
+		eof    bool // the local side finished sending
+		reader bool
+	}
+	done := make(chan half, 2)
 	stop := context.AfterFunc(ctx, func() { s.Close(""); local.Close() })
 	defer stop()
+	var delivered atomic.Int64
 	go func() {
 		buf := make([]byte, 64<<10)
 		for {
 			n, err := local.Read(buf)
 			if n > 0 {
 				if werr := s.SendRaw(append([]byte(nil), buf[:n]...)); werr != nil {
-					done <- werr
+					done <- half{err: werr, reader: true}
 					return
 				}
 			}
 			if err != nil {
-				done <- nil
+				done <- half{eof: err == io.EOF, reader: true}
 				return
 			}
 		}
@@ -176,22 +184,55 @@ func (m *Mapping) runLegacy(ctx context.Context, s *peer.Session, local io.ReadW
 			b, err := s.RecvRaw()
 			if len(b) > 0 {
 				if _, werr := local.Write(b); werr != nil {
-					done <- nil
+					done <- half{}
 					return
 				}
+				delivered.Add(1)
 			}
 			if err != nil {
-				done <- nil
+				done <- half{}
 				return
 			}
 		}
 	}()
-	// The first half to end ends both. The other one is not waited for: a
-	// read from stdin (rdcli pipe) cannot be interrupted.
-	err := <-done
+	// The first half to end ends both; the other one is not waited for (a
+	// read from stdin, rdcli pipe, cannot be interrupted). Except a local
+	// EOF: the answer is still on its way (see Tunnel.Serve).
+	h := <-done
+	if h.eof && ctx.Err() == nil {
+		linger := DefaultLinger
+		if l, ok := local.(interface{ LingerAfterEOF() time.Duration }); ok {
+			linger = l.LingerAfterEOF()
+		}
+		waitIdle(done, &delivered, linger)
+	}
 	s.Close("")
 	local.Close()
-	return err
+	return h.err
+}
+
+// waitIdle waits for the next value on ch, or, with linger > 0, until
+// nothing was delivered for linger. ok is false on the idle timeout.
+func waitIdle[T any](ch <-chan T, delivered *atomic.Int64, linger time.Duration) (v T, ok bool) {
+	var tick <-chan time.Time
+	if linger > 0 {
+		tk := time.NewTicker(linger)
+		defer tk.Stop()
+		tick = tk.C
+	}
+	seen := delivered.Load()
+	for {
+		select {
+		case v = <-ch:
+			return v, true
+		case <-tick:
+			if n := delivered.Load(); n != seen {
+				seen = n
+				continue
+			}
+			return v, false
+		}
+	}
 }
 
 // Close ends the shared tunnel.
@@ -338,6 +379,10 @@ type Stdio struct {
 	In  io.ReadCloser
 	Out io.WriteCloser
 }
+
+// LingerAfterEOF: after stdin ends, the answer is still wanted (a request
+// piped in, rdcli pipe as ssh's ProxyCommand), for as long as it takes.
+func (Stdio) LingerAfterEOF() time.Duration { return 0 }
 
 func (s Stdio) Read(p []byte) (int, error)  { return s.In.Read(p) }
 func (s Stdio) Write(p []byte) (int, error) { return s.Out.Write(p) }

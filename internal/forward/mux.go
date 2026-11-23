@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bropines/rdcli/internal/pb"
@@ -25,6 +26,10 @@ const (
 	MaxChannels            = 256
 	MaxSendCredit          = ChannelWindow
 )
+
+// DefaultLinger is how long a channel whose local end stopped sending (EOF)
+// waits for more data from the device before closing. A variable for tests.
+var DefaultLinger = 10 * time.Second
 
 func effectiveWindow(advertised uint32) uint32 { return max(advertised, InitialWindow) }
 
@@ -362,10 +367,13 @@ func (t *Tunnel) Serve(ctx context.Context, local io.ReadWriteCloser) error {
 
 	type end struct {
 		fromReader                   bool
+		eof                          bool
 		local, peerClosed, violation bool
 		refused                      string
 	}
 	ends := make(chan end, 2)
+	// tunnel -> local deliveries, for the linger after a local EOF
+	var delivered atomic.Int64
 
 	// local -> tunnel, under the peer's credit
 	go func() {
@@ -391,7 +399,7 @@ func (t *Tunnel) Serve(ctx context.Context, local io.ReadWriteCloser) error {
 				}
 			}
 			if err != nil {
-				ends <- end{fromReader: true, local: true}
+				ends <- end{fromReader: true, local: true, eof: err == io.EOF}
 				return
 			}
 		}
@@ -415,6 +423,7 @@ func (t *Tunnel) Serve(ctx context.Context, local io.ReadWriteCloser) error {
 				ends <- end{local: true}
 				return
 			}
+			delivered.Add(1)
 			if add, ok := c.window.drain(len(m.data)); ok {
 				if t.s.Send(channelMsg(updateU{&pb.PortForwardWindowUpdate{ChannelId: id, Add: add}})) != nil {
 					ends <- end{}
@@ -427,6 +436,20 @@ func (t *Tunnel) Serve(ctx context.Context, local io.ReadWriteCloser) error {
 	defer stop()
 
 	first := <-ends
+	if first.eof {
+		// The protocol has no half-close: the local side finished sending,
+		// but the answer still comes (a request piped in and then EOF). Keep
+		// delivering until the device closes, the writer fails, or, unless
+		// the local end asks to wait indefinitely, nothing arrives for a
+		// while (a client that closed completely would leak the channel).
+		linger := DefaultLinger
+		if l, ok := local.(interface{ LingerAfterEOF() time.Duration }); ok {
+			linger = l.LingerAfterEOF()
+		}
+		if e, ok := waitIdle(ends, &delivered, linger); ok {
+			first = e // the writer's end; the reader is already done
+		}
+	}
 	// Stop the other half: closing local unblocks a socket read or write,
 	// closing the credit a reader waiting for window.
 	local.Close()

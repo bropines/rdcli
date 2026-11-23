@@ -675,6 +675,36 @@ func EchoServer(t testing.TB) string {
 	return ln.Addr().String()
 }
 
+// ReplyServer is a target that reads one line, answers with reply after a
+// pause, then closes (an HTTP/1.0 server, roughly).
+func ReplyServer(t testing.TB, reply string, pause time.Duration) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				b := make([]byte, 1)
+				for {
+					if _, err := c.Read(b); err != nil || b[0] == '\n' {
+						break
+					}
+				}
+				time.Sleep(pause)
+				c.Write([]byte(reply))
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
 // BurstServer is a target that writes n bytes as soon as a client connects,
 // then closes, whatever the client is still sending.
 func BurstServer(t testing.TB, n int) string {

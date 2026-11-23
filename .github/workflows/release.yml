@@ -26,19 +26,7 @@ jobs:
       - name: build
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          mkdir dist
-          for t in linux/amd64 linux/arm64 linux/arm darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 freebsd/amd64; do
-            os=${t%/*}; arch=${t#*/}; ext=""; [ "$os" = windows ] && ext=.exe
-            name="rdcli-${TAG#v}-${os}-${arch}"
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
-              -ldflags "-s -w -X github.com/bropines/rdcli/internal/cli.Version=${TAG#v}" \
-              -o "dist/$name/rdcli$ext" ./cmd/rdcli
-            cp README.md LICENSE NOTICE "dist/$name/"
-            if [ "$os" = windows ]; then (cd dist && zip -qr "$name.zip" "$name"); else tar -C dist -czf "dist/$name.tar.gz" "$name"; fi
-            rm -rf "dist/$name"
-          done
-          (cd dist && sha256sum * > SHA256SUMS)
+        run: bash scripts/build.sh "${TAG#v}"
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}

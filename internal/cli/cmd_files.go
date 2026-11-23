@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -66,6 +67,10 @@ func runLs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// The device lists in directory order; sort by name like ls.
+	sort.SliceStable(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	for _, e := range entries {
 		name := e.Name

@@ -36,9 +36,12 @@ type ShellOptions struct {
 	// Escape is the escape character at the start of a line (default '~';
 	// -1 disables): "~." disconnects, "~~" sends one "~", "~?" lists them.
 	Escape int
-	// Command is typed into the shell after it opens, followed by exit
-	// (a one-shot command; the output includes the shell's echo).
+	// Command is run in the shell, which then exits. On POSIX peers only its
+	// output is printed and its exit status returned (see WrapCommand).
 	Command string
+	// RawCommand types Command as is, followed by exit: the output then
+	// includes the prompts and the shell's echo (Windows peers always).
+	RawCommand bool
 }
 
 // LoginFields returns the LoginRequest fields of a terminal session.
@@ -169,8 +172,25 @@ wait:
 		})
 		defer stop()
 	}
+	var filter *cmdFilter
+	if o.Command != "" && !o.RawCommand && !isWindowsPeer(s) {
+		filter = &cmdFilter{crlf: !stdoutTTY}
+	}
+	// show writes terminal output; done: the wrapped command finished.
+	show := func(d []byte) (done bool, code int) {
+		if filter == nil {
+			os.Stdout.Write(d)
+			return false, 0
+		}
+		out, done, code := filter.feed(d)
+		os.Stdout.Write(out)
+		return done, code
+	}
 	for _, d := range early {
-		os.Stdout.Write(d)
+		if done, code := show(d); done {
+			s.Close("")
+			return Result{ExitCode: code}, nil
+		}
 	}
 
 	writeData := func(b []byte) error {
@@ -185,7 +205,9 @@ wait:
 		}
 		return nil
 	}
-	if o.Command != "" {
+	if filter != nil {
+		writeData([]byte(WrapCommand(o.Command)))
+	} else if o.Command != "" {
 		eol := "\n"
 		if isWindowsPeer(s) {
 			eol = "\r\n"
@@ -223,9 +245,15 @@ wait:
 				}
 				return Result{ServiceID: serviceID}, ev.err
 			case ev.data != nil:
-				os.Stdout.Write(ev.data)
+				if done, code := show(ev.data); done {
+					s.Close("")
+					return Result{ExitCode: code}, nil
+				}
 			case ev.exit != nil:
 				s.Close("")
+				if filter != nil && !filter.started {
+					return Result{ExitCode: *ev.exit}, errors.New("the shell on the device ended without running the command (not a POSIX shell? try --raw)")
+				}
 				return Result{ExitCode: *ev.exit}, nil
 			}
 		case b := <-input:
