@@ -24,7 +24,13 @@ func init() {
 // A session that gets no answer to its first listing (see files.Probe) is
 // dropped for a new one.
 func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, func(), error) {
-	const attempts = 3
+	// Windows: a session that ends without a transfer (ls) leaves the
+	// connection manager with no client, and it quits; a session opened in
+	// that moment is attached to the quitting process and never answered.
+	// A healthy session gets the device's first listing within about a
+	// second, so short probes find the dead ones fast; the last attempt
+	// waits long, for slow links.
+	const attempts = 4
 	for i := 1; ; i++ {
 		s, err := t.connect(ctx, pb.ConnType_FILE_TRANSFER, files.LoginFields("", showHidden), files.LoginErrorCode)
 		if err != nil {
@@ -37,8 +43,11 @@ func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, 
 		kctx, cancel := context.WithCancel(ctx)
 		go s.KeepAlive(kctx, 20*time.Second)
 		c := files.New(s, t.flags.debugf)
-		// A healthy session lists within about a second; a doomed one never.
-		err = c.Probe(ctx, 6*time.Second)
+		probe := 4 * time.Second
+		if i == attempts {
+			probe = 20 * time.Second
+		}
+		err = c.Probe(ctx, probe)
 		if err == nil {
 			return c, func() { cancel(); c.Close() }, nil
 		}
@@ -49,7 +58,7 @@ func openFiles(ctx context.Context, t *target, showHidden bool) (*files.Client, 
 		}
 		t.flags.logf("the device's file service did not answer; reconnecting")
 		select {
-		case <-time.After(time.Second):
+		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		}
